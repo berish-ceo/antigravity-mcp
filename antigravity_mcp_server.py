@@ -118,6 +118,7 @@ class ModelRegistry:
                 proc = await asyncio.create_subprocess_exec(
                     agy_bin,
                     "models",
+                    env=agy_env(),
                     stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -288,6 +289,17 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="[antigravity-mcp] %(levelname)s: %(message)s")
 
 
+def agy_env() -> Optional[dict[str, str]]:
+    proxy = os.environ.get("AGY_PROXY_URL")
+    if not proxy:
+        return None  # Inherit the launching environment unchanged.
+    env = os.environ.copy()
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        env[key] = env[key.lower()] = proxy
+    env["NO_PROXY"] = env["no_proxy"] = "localhost,127.0.0.1,::1"
+    return env
+
+
 def get_agy_path() -> str:
     """Finds the path to the installed agy binary."""
     path = shutil.which("agy")
@@ -453,6 +465,7 @@ async def run_agy_stream_turn(
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
+        env=agy_env(),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

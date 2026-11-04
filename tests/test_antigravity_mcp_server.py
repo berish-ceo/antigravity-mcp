@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import stat
 import subprocess
@@ -676,6 +677,26 @@ asyncio.run(launch())
                 timeout=60,
                 extra_flags=None,
             )
+
+    async def test_proxy_applies_to_model_discovery_and_turns_only_when_configured(self) -> None:
+        spawn = asyncio.create_subprocess_exec
+        for proxy in ("", "socks5://127.0.0.1:1088"):
+            with patch.dict(os.environ, {"AGY_PROXY_URL": proxy, "https_proxy": "http://parent.invalid"}), \
+                    patch.object(asyncio, "create_subprocess_exec", wraps=spawn) as calls:
+                await server.ModelRegistry().get_flash_models()
+                await server.run_agy("probe", cwd=self.temp_dir.name, model="gemini-3.8-flash-low", timeout=5)
+                self.assertEqual(os.environ["https_proxy"], "http://parent.invalid")
+            self.assertEqual([c.args[1] for c in calls.await_args_list], ["models", "--model"])
+            for c in calls.await_args_list:
+                env = c.kwargs["env"]
+                if not proxy:
+                    self.assertIsNone(env)
+                    continue
+                for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+                    self.assertEqual(env[name], proxy)
+                    self.assertEqual(env[name.lower()], proxy)
+                self.assertEqual(env["NO_PROXY"], env["no_proxy"])
+                self.assertIn("127.0.0.1", env["NO_PROXY"].split(","))
 
     async def test_run_agy_uses_stream_transport_and_preserves_json_contract(self) -> None:
         output = await server.run_agy(
