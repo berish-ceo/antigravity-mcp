@@ -1,0 +1,16 @@
+{
+  "research-gate-local": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AGY_MCP_PYTHON\" \"$AGY_MCP_GUARD\" local",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

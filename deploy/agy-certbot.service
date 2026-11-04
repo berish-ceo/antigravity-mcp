@@ -1,0 +1,6 @@
+[Unit]
+Description=Renew the public IP certificate for the Antigravity proxy
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/opt/agy-certbot/bin/certbot renew --quiet

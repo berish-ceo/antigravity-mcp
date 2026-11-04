@@ -1,24 +1,86 @@
-# Research Playbook
+# Grounded Research Playbook
 
-Use this reference when a search needs more precise targeting or a source is difficult to read.
+Практическое руководство по проведению внешних исследований, формулированию запросов и работе с источниками через Google Grounding с учетом правил экономии токенов и fallback.
 
-## Focus a Search
+---
 
-Include the subject, version or date when relevant, and the question to answer. Use `domains` when the user names a source or primary documentation is preferable. Avoid repeating an equivalent query when the first result already answers it.
+## 1. Grounded Search — Основной Инструмент Поиска
 
-Example:
+`antigravity_grounded_search` — это **первичный способ получения информации и превью-фактов**.
+
+Это обязательный барьер перед нативным веб-поиском Codex. Он действует также для поисков, запрошенных другими навыками. Если MCP-инструмент не показан изначально, найди отложенный `mcp__antigravity__antigravity_grounded_search` по точному имени; это ещё не означает недоступность.
+
+### Бюджет операции и fallback
+- `timeout` задаётся в секундах, диапазон 1–900; по умолчанию 280 для `low` и `medium` и 480 для `high`. Это мягкий ориентир для модели, операция после него не обрывается. Сервер останавливает операцию только по 15-минутному предохранителю. Antigravity сам восстанавливается после промежуточных сбоев.
+- Ответ `PARTIAL (<причина>):` содержит текст, полученный до сбоя: используй его и добирай нативным поиском только названный пробел.
+- Если вся операция завершилась ошибкой или вернула `FALLBACK_REQUIRED`:
+  1. Не повторяй запрос через Grounded Search.
+  2. **Сразу переходи на нативный поиск Codex (`web_search`)** для выполнения задачи.
+  3. Назови причину fallback в ответе пользователю.
+
+---
+
+## 2. Экономия Времени и Токенов
+
+- **Никаких избыточных запросов**: формулируй один точный и ёмкий запрос вместо серии дробных или повторяющихся.
+- **Не дублируй поиск**: если данные получены на предыдущем шаге диалога, используй их из контекста.
+- **Указывай домены**: `domains` ставит авторитетные источники в приоритет, а другие агент берёт, только когда там нет ответа.
+- **Не запрашивай URL вслепую**: вызывай `antigravity_fetch_url` только тогда, когда поискового сниппета действительно недостаточно для ответа.
+
+---
+
+## 3. Модели и effort
+
+- **Модель**: по умолчанию семейство **`gemini-3.8-flash`**; `model` принимает только семейство Gemini Flash 3.8+ без уровня.
+- **Все остальные модели (Pro, Ultra, сторонние) строго запрещены**.
+- **Effort**: по умолчанию `medium`. `high` выбирай для исследований, от которых зависит архитектура или выбор технологии, для подробного ресёрча по многим источникам и для изучения большого материала, где неглубокий проход потеряет знания. `low` подходит только для быстрой узкой проверки, где промах дёшев. Полная таблица приведена в разделе «Models and Effort» SKILL.md.
+- Параметра `depth` у `grounded_search` больше нет: вместо `depth="fast"` передавай `effort="low"`, а вместо `depth="deep"` и `"critical"` передавай `effort="high"`.
+
+---
+
+## 4. Формулирование поисковых запросов
+
+Google Grounding работает эффективнее всего, когда запрос объединяет:
+- Конкретные названия библиотек и мажорных версий (`"NestJS 11"`, `"NATS.js v2.28"`).
+- Предметную проблему (`"reconnection backoff"`, `"graceful drain"`, `"memory leak"`).
+- Контекст технологии (`"TypeScript"`, `"Node.js 22"`).
+
+### Примеры эффективных запросов
+
+| Задача | Плохой запрос | Эффективный запрос |
+| :--- | :--- | :--- |
+| Поиск breaking changes | `nestjs nats update` | `"NestJS 11" NATS microservice breaking changes migration guide` |
+| Оптимизация буфера | `fast redis node` | `ioredis pipeline vs multi benchmark latency high throughput Node.js` |
+| Поиск решений известной ошибки | `nats connection closed error` | `nats.js "connection closed" error auto-reconnect JetStream cluster` |
+
+---
+
+## 5. Использование доменных фильтров (`domains`)
+
+`domains` ставит авторитетные ресурсы в приоритет: другие сайты агент берёт, только когда на них нет ответа, и называет их в ответе.
 
 ```json
 {
-  "query": "NATS JetStream consumer backpressure TypeScript official documentation",
-  "domains": ["docs.nats.io"]
+  "query": "NATS JetStream consumer backpressure TypeScript",
+  "domains": [
+    "github.com",
+    "nats.io",
+    "docs.nestjs.com",
+    "nodejs.org"
+  ]
 }
 ```
 
-## Read a Source
+---
 
-Pass a precise `prompt` to `antigravity_fetch_url`. Ask for the facts, API, or passage needed rather than the entire page. If the result is incomplete, note the gap; do not infer missing content from a summary.
+## 6. Работа с `antigravity_fetch_url` и Fallback
 
-## Recover from a Final Failure
-
-An intermediate reader error can be recovered within the Antigravity operation's timeout. Switch to another available research tool only after the call fails, returns `FALLBACK_REQUIRED`, reaches its timeout, or the MCP tool cannot be called. Tell the user why the fallback was needed.
+`antigravity_fetch_url` используется для агентного чтения и анализа первоисточников:
+- **Обязательный первый reader**: начинай чтение каждого выбранного публичного источника с Antigravity, включая случаи, когда другой навык предлагает собственный fetch/open.
+- **Агентное выполнение**: загрузку и извлечение выполняет агент Antigravity. Своего ридера у agy нет: страницу он получает через `curl` из изолированного каталога, где запрещены локальные файлы, MCP и другие команды.
+- **Ответ и prompt**: задавай нужные факты, API, примеры и формат в `prompt`. Antigravity готовит ответ по запросу или summary по умолчанию. Тело страницы включается только когда это нужно по `prompt`.
+- **Восстановление**: пустой reader-кэш, обрезанный текст или HTML без статьи требуют другого способа чтения внутри Antigravity.
+- **Fallback** после итоговой ошибки или `FALLBACK_REQUIRED` (при `PARTIAL` сначала используй полученный текст):
+  - Не пытайся повторно опрашивать URL через `antigravity_fetch_url`.
+  - **Сразу переходи на нативное чтение URL: браузер или curl**.
+  - Назови причину fallback в ответе пользователю.

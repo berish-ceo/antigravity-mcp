@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+# Called by "certbot renew" only after a successful renewal.
+[ "$RENEWED_LINEAGE" = /etc/letsencrypt/live/agy-proxy ] || exit 0
+install -d -o root -g proxy -m 0750 /etc/squid/agy-tls
+for pem in fullchain.pem privkey.pem; do
+  install -o root -g proxy -m 0640 "$RENEWED_LINEAGE/$pem" "/etc/squid/agy-tls/$pem"
+done
+if systemctl is-active --quiet squid; then systemctl reload squid; fi

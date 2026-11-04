@@ -1,150 +1,170 @@
-# Antigravity MCP for Codex
+# Antigravity CLI MCP Server for Codex
 
-Локальный MCP-сервер для работы Codex с установленным Antigravity CLI (`agy`). В репозитории также находится skill для исследования внешних источников. Сервер использует авторизованную сессию `agy`; отдельный API-ключ для этого моста не нужен.
+Локальный MCP-сервер, связывающий **Codex** и **Antigravity CLI (`agy`)**. Он даёт Codex четыре инструмента
+исследования: поиск в интернете, чтение страницы, разведку кода и поиск по документации проекта.
 
-Чтобы направить запросы через свой SSH-сервер, следуйте [инструкции для macOS](docs/macos-ssh-proxy.md). Переменная `AGY_PROXY_URL` задаёт прокси для дочерних процессов `agy`. Без неё CLI наследует обычное окружение.
+Работает через личную сессию Antigravity. Можно обращаться к Google напрямую или через [персональный HTTPS-прокси](docs/proxy-client.md). Если прокси ещё нет, см. [развёртывание на сервере](docs/proxy-server.md). OpenCodex и SSH-туннель не требуются.
 
-## Установка агентом
+В текущей версии ровно четыре инструмента: grounded search, fetch URL, codebase scout и docs research. Управляемых сессий, фоновых исполнителей и команд `turn_*` из предыдущей публичной версии больше нет. Перед обновлением завершите старые задания. Порядок обновления сервера **и** skill приведён в [инструкции по установке](INSTALL_WITH_AGENT.md).
 
-Скопируйте готовый запрос из [INSTALL_WITH_AGENT.md](INSTALL_WITH_AGENT.md) в задачу Codex. Агент установит сервер и skill, проверит подключение и дополнит выбранный `AGENTS.md` правилами только для research. По умолчанию он использует `~/.codex/AGENTS.md`; проектный путь можно указать в запросе.
+---
 
-## Установка вручную
+## Установка
 
-Нужны macOS, Python 3.10+, Codex и авторизованный `agy` с доступной Gemini Flash 3.8+. Сервер не устанавливает и не распространяет `agy`. Для иных ОС совместимость ещё не проверена.
+Проверенная конфигурация на macOS: `agy 1.5.0`, Python 3.13 и `mcp 2.2.0`. Нужна доступная модель Gemini Flash 3.8+. Устанавливайте Python версии, совместимой с `requirements.txt`.
 
 ```bash
 git clone https://github.com/berish-ceo/antigravity-mcp.git "$HOME/.local/share/antigravity-mcp"
-repo_dir="$HOME/.local/share/antigravity-mcp"
-python3 -m venv "$repo_dir/.venv"
-"$repo_dir/.venv/bin/python" -m pip install -r "$repo_dir/requirements.txt"
-codex mcp add antigravity -- \
-  "$repo_dir/.venv/bin/python" "$repo_dir/antigravity_mcp_server.py"
-mkdir -p "$HOME/.codex/skills"
-cp -R "$repo_dir/skills/antigravity-research" "$HOME/.codex/skills/"
+cd "$HOME/.local/share/antigravity-mcp"
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+codex mcp add antigravity -- "$PWD/.venv/bin/python" "$PWD/antigravity_mcp_server.py"
 ```
 
-Если запись `antigravity` или каталог skill уже существуют, проверьте их перед изменением. Для стандартного бюджета операции 300 секунд задайте `tool_timeout_sec = 330` в `[mcp_servers.antigravity]` файла `~/.codex/config.toml`. Для маршрутизации research добавьте [блок из инструкции агенту](INSTALL_WITH_AGENT.md#блок-для-agentsmd) в выбранный `AGENTS.md`. После изменения конфигурации откройте новую сессию Codex.
+`agy 1.2.2` пытается загрузить драйвер Playwright Go 1.57.0 со старых CDN, которые отвечают 404
+([upstream issue #566](https://github.com/google-antigravity/antigravity-cli/issues/566)). На чистом macOS восстановите
+ожидаемый кэш из официального npm-пакета перед запуском MCP. С `agy 1.4.7` сервер работает и без этого кэша:
+в режиме печати у агента нет браузерных инструментов.
 
-Команда `codex mcp add` и таблица `[mcp_servers.<name>]` описаны в [документации Codex MCP](https://developers.openai.com/codex/mcp). Пользовательские skills и установка из GitHub описаны в [документации Codex Skills](https://developers.openai.com/codex/skills).
+```bash
+repair_dir=$(mktemp -d)
+npm pack playwright-core@1.57.0 --pack-destination "$repair_dir"
+tar -xzf "$repair_dir/playwright-core-1.57.0.tgz" -C "$repair_dir"
+cp "$(command -v node)" "$repair_dir/node"
+chmod u+x "$repair_dir/node"
+mkdir -p "$HOME/Library/Caches/ms-playwright-go/1.57.0"
+mv "$repair_dir/package" "$repair_dir/node" "$HOME/Library/Caches/ms-playwright-go/1.57.0/"
+```
 
-После обновления перезапустите подключение MCP, чтобы загрузить новый Python-код. Turns и их stream events сохраняются в
-`~/.gemini/antigravity-cli/mcp_runs.db`. Каждый turn выполняется отдельным `managed_worker.py`, который переживает
-завершение MCP и сам сохраняет результат. Новый MCP читает тот же `turn_id` из SQLite. Закрытие транспорта не останавливает
-исполнителя; для остановки используйте `antigravity_turn_interrupt`. Он проверяет identity процесса и ждёт подтверждения.
-Приватные запросы и логи находятся в `~/.gemini/antigravity-cli/mcp-runs/<run_id>/`; запрос удаляется после загрузки.
+После обновления перезапустите подключение MCP, чтобы загрузить новый Python-код.
 
-## Таймауты одноразовых операций
+Установите также skill с обоими справочниками по [инструкции](INSTALL_WITH_AGENT.md). Если прокси не задан, `agy` наследует обычные сетевые настройки. Для прокси с паролем используйте `AGY_PROXY_FILE`: в конфигурации Codex будет только путь к файлу.
 
-`grounded_search`, `fetch_url`, `deep_research`, `grounded_dialogue`, `ask_antigravity` и `review`
-принимают `timeout=300`. Отсчёт включает выбор модели, запуск CLI, получение данных и подготовку ответа.
-Остановка процесса после deadline может занять ещё до 2 секунд. Отмена вызова завершает его дочерний CLI.
+## Инструменты
 
-Если вызываете операцию с бюджетом больше 300 секунд, увеличьте `tool_timeout_sec` выше переданного `timeout` с запасом на остановку процесса. Максимальному `timeout=86400` соответствует клиентский лимит не менее 86402 секунд.
+1. **`antigravity_grounded_search(query, require_sources?, domains?, output_format?, model?, effort?, timeout?)`**
+   * Основной инструмент поиска с Google Grounding. После сбоя `search_web` Antigravity может получить веб-источники
+     другим доступным способом и раскрывает замену в ответе.
+   * `output_format="json"` возвращает summary, key_findings, sources и unresolved_or_conflicting.
+2. **`antigravity_fetch_url(url, prompt?, model?, effort?, timeout?)`**
+   * Ответ по `prompt` или summary по умолчанию; HTML, полный текст и конкретные фрагменты включаются, только если они
+     нужны запросу.
+   * Своего ридера у `agy` нет, поэтому страницу агент читает через `curl`. При неполной загрузке он дочитывает
+     фрагменты или берёт канонический или официальный источник, например JSON API сайта. При итоговом отказе
+     возвращается `FALLBACK_REQUIRED`.
+3. **`antigravity_codebase_scout(query, target_path?, focus_files?, model?, effort?, timeout?)`**
+   * Разведка локального кода только для чтения. Ответ содержит проверенные пути, запрошенный поток выполнения и
+     пробелы; полный обзор репозитория не требуется.
+4. **`antigravity_docs_research(query, target_path?, focus_files?, scope?, model?, effort?, timeout?)`**
+   * Поиск по локальной документации только для чтения. `scope` выбирает текущие документы, историю или всё сразу.
+     Отчёт содержит документы с цитатами и метками, ответ на вопрос, противоречия и пробелы.
 
-Пример аргументов: `{"url":"https://example.com","prompt":"Кратко изложи назначение страницы","timeout":450}`.
+## Модель и effort
+
+У всех инструментов есть два необязательных поля. `model` называет семейство Gemini Flash версии 3.8 или новее без
+уровня, по умолчанию `gemini-3.8-flash`; модели не из Flash запрещены. `effort` задаёт уровень рассуждений и глубину:
+`low`, `medium` (по умолчанию) или `high`. Из них сервер собирает id модели для CLI: `gemini-3.8-flash` и `high` дают
+`gemini-3.8-flash-high`. Имя с уровнем, например `gemini-3.8-flash-low`, и неверный `effort` сервер отклоняет до
+запуска CLI. Схема инструментов перечисляет допустимые значения `effort`, `scope` и `output_format`.
+
+## Бюджет времени
+
+Инструменты принимают `timeout` от 1 до 900 секунд, то есть не больше предохранителя. Это рекомендованный бюджет
+времени: сервер передаёт его в промпт и ждёт ответа и после истечения бюджета. Без `timeout` бюджет зависит от `effort`:
+
+| Инструменты | `low` | `medium` | `high` |
+| --- | --- | --- | --- |
+| `grounded_search`, `fetch_url` | 280 с | 280 с | 480 с |
+| `codebase_scout`, `docs_research` | 90 с | 180 с | 300 с |
+
+Промпт просит модель после двух третей бюджета не открывать новые направления поиска, собрать проверенные находки с
+пробелами и довести ответ до конца, даже если бюджет истёк.
+
+Операцию останавливает только предохранитель `RESEARCH_SAFETY_LIMIT_SECONDS`: 15 минут на всю операцию при любом
+`timeout`. CLI получает `--print-timeout` в размере 96% предохранителя и успевает вернуть частичный ответ до остановки
+процесса. Отмена вызова завершает дочерний CLI. Если CLI вернул текст ответа вместе с ошибкой, сервер сохраняет его как
+`PARTIAL (<причина>):`; без текста возвращается `FALLBACK_REQUIRED`.
+
+В `~/.codex/config.toml` для `[mcp_servers.antigravity]` установите `tool_timeout_sec = 960`,
+`supports_parallel_tool_calls = true` и `default_tools_approval_mode = "approve"`. Клиентский лимит должен превышать
+предохранитель, иначе Codex прекратит ожидание раньше сервера; минута запаса уходит на завершение CLI и доставку
+ответа. Второй ключ разрешает Codex отправлять вызовы к серверу параллельно. Третий запускает все четыре инструмента
+без запроса одобрения: они только читают и помечены `readOnlyHint`. После изменения нужен перезапуск подключения MCP.
+
+## Изоляция запусков
+
+Каждый запуск `agy` идёт из пустого каталога сервера, где `.agents/hooks.json` вызывает `tool_guard.py` перед
+каждым инструментом и передаёт ему профиль каталога. Глобальные hooks и исследуемый репозиторий не меняются.
+
+Каталог `workspaces/web` служит поиску и чтению URL. Хук разрешает только `search_web`, итоговый ответ и `curl` GET
+одного публичного адреса http(s), при необходимости через `head`, `tail`, `grep`, `wc` или `sed -n 'N,Mp'`.
+Медленный `curl` через пять секунд уходит в фон, и агент читает или останавливает его через `manage_task`.
+Остальное запрещено: локальные файлы, MCP, другие команды, перенаправления, цепочки команд, подстановки `$`, POST,
+`-o`, `@файл`, `file://`, `localhost` и частные сети. Инструкция со страницы не может через агента выполнить
+команду, прочитать локальный файл или что-то записать.
+
+Каталог `workspaces/local` служит Scout и Docs Research; цель подключается через `--add-dir`. Хук запрещает
+выполнение, изменения, делегирование, `schedule`, `send_message` и `manage_task`. MCP-инструмент проходит, только
+если его имя читает: get, list, find, search, read, query, resolve, fetch, explore или view. Поэтому MCP-инструмент,
+который пишет, например во внешний трекер, заблокирован по умолчанию.
+
+MCP-вызов приходит в хук как шаг `call_mcp_tool` с полями `ServerName` и `ToolName`, хотя модель видит его как
+`mcp_<server>_<tool>`. Защита фильтрует имена и команды и не заменяет OS-песочницу. Флаг `--mode plan` сервер не
+передаёт: вместе с `--disable-slash-commands` он не действует, а без этого флага агент вместо ответа пишет план и ждёт
+одобрения.
+
+## Scout
+
+Передавайте один вопрос, узкий `target_path` и известные `focus_files`. Длина отчёта зависит от `effort`: до 500 слов
+на `low`, до 800 на `medium` и без ограничения на `high`.
+
+Scout выполняет статическое чтение кода через нативные инструменты, MCP и ресурсы. Промпт запрещает shell-команды,
+выполнение кода, тесты, сборки, сервисы, фоновые процессы, правки и делегирование, включая вызовы через MCP.
+Запуск защищает хук каталога `workspaces/local` (см. «Изоляция запусков»).
+В разделе `Needs Verification` Scout передаёт основному агенту проверки, для которых недостаточно исходников.
+Второй Scout-запрос может уточнить исходники, но также остаётся статическим.
+
+Большие аудиты основной агент разбивает на отдельные вопросы по подсистемам или контрактам. Сначала Scout
+находит точки входа, затем небольшие независимые запросы уточняют нужные файлы. Сам Scout не делегирует исследование.
+При отказе сохраняются доступный текст ответа и идентификатор разговора. События прогресса без текста не считаются
+частичным отчётом: в таком случае возвращается `FALLBACK_REQUIRED` с причиной и `conversation_id`.
+
+## Поиск по документации
+
+`docs_research` отвечает на один вопрос по документации проекта и запускается так же, как Scout: из каталога
+`workspaces/local` с тем же хуком и с проектом через `--add-dir`. Промпт велит искать в документах, а код
+открывать, только когда документы не отвечают. `scope` выбирает документы: `current` (по умолчанию) берёт текущие,
+`history` берёт старые версии, а `all` берёт и те и другие с метками. Текущей считается версия из манифеста пакета, а
+без манифеста самая новая папка версии; документы вне папок версий, в том числе сессии, планы и отчёты, тоже текущие.
+Если вопрос или правила проекта определяют это иначе, действуют они. Отчёт перечисляет до пяти документов со строками,
+меткой и цитатой, затем ответ со ссылками на них, противоречия и пробелы. Длина отчёта: до 400 слов на `low`, до 800
+на `medium` и без ограничения на `high`.
+
+Перед вызовом сервер собирает карту текущих Markdown-документов цели, сгруппированных по папкам, и модель начинает
+поиск с неё: выбирает кандидатов по именам файлов, а по содержимому ищет то, чего в карте нет. Файлы берутся из
+`git ls-files`, который уже отбрасывает игнорируемые папки, а вне git из обхода дерева, который пропускает все скрытые
+папки. В обоих случаях пропускаются `.agents/` с установленными скиллами агентов и `node_modules`;
+другие скрытые папки вроде `.codex/` и `.github/` входят в карту. Из папок версий
+вида `docs/<version>/` остаётся версия из `package.json`, без манифеста самая новая, а в папке версии со `snapshots/` только
+`snapshots/` и `changelog.md`. Модель получает карту целиком и сама решает, что читать.
+
+Пример аргументов: `{"url":"https://example.com","prompt":"Кратко изложи назначение страницы","effort":"high"}`.
 
 ## Проверка
 
-Из корня репозитория, в созданном виртуальном окружении:
+Из корня репозитория:
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -q
 ```
 
-## Основной lifecycle
-
-Публичная модель повторяет Codex: **session → turn → items/commands**.
-
-1. `antigravity_turn_start(message, ...)` сразу возвращает `turn_id`.
-2. `antigravity_turn_wait(turn_id)` пассивно ждёт terminal state. Таймаут MCP-клиента не отменяет turn.
-3. `antigravity_turn_items` и `antigravity_turn_commands` возвращают пагинированные stream events.
-4. Следующий `turn_start(..., session_id=<id>)` продолжает контекст; `turn_interrupt` отменяет активный turn.
-
-`execution_timeout_seconds` ограничивает сам `agy` turn и не равен таймауту вызова MCP. Допустимый диапазон — от 1
-секунды до 24 часов. `idempotency_key` безопасно дедуплицирует повторный start. Prompt передаётся через stdin NDJSON и
-не попадает в argv процесса. Legacy `antigravity_subagent_*` сохранены для совместимости.
-
-Внешняя граница управления — целый turn. Параметр `agent` выбирает зарегистрированного `agy` agent. Внутренние
-child-agent tools Antigravity видны в `antigravity_turn_commands`, но `agy 1.2.2` не предоставляет стабильных внешних
-child IDs или отдельных `send/wait/interrupt` команд. MCP не имитирует отсутствующий control API.
-
-Для `sync_to_desktop=true` откройте Antigravity Desktop. MCP передаёт исходный CLI summary методам Desktop
-`LoadTrajectory` и `JetboxWriteSummary`; Desktop обновляет собственный реестр и уведомляет sidebar.
-Прямая запись `agyhub_summaries_proto.pb` не обновляет список в памяти и больше не используется.
-`synced_to_desktop=true` означает регистрацию и совпадение числа шагов CLI и Desktop, а `desktop_present` — только наличие файла базы.
-Если Desktop закрыт или недоступен, выполнение CLI сохраняет свой результат, а синхронизация возвращает `false`.
-После открытия Desktop повторите её через `antigravity_sync_all_desktop_sessions`.
-
-Проверено на Antigravity Desktop 2.12.2/macOS: новая MCP-сессия появляется без reload и открывается с сообщениями.
-Обнаружение HTTPS-порта использует `~/Library/Logs/Antigravity/language_server.log`; локальный API версионно зависим.
-Desktop кэширует уже открытые разговоры: последующие CLI turns могут не обновить их сообщения даже после reload UI.
-В этом случае MCP возвращает `synced_to_desktop=false`, сохраняя успешный результат CLI. API `LoadTrajectory` не сбрасывает
-загруженный кэш; полное live-обновление продолжений через CLI пока не поддерживается.
-Не продолжайте один разговор одновременно в CLI и Desktop.
-
 ---
 
-## 7 Ключевых Правил Работы
+## Ключевые правила работы
 
 1. **Grounded Search — основной способ поиска**: `antigravity_grounded_search` используется как первичный инструмент для поиска превью-информации и актуальных фактов в интернете.
-2. **Таймаут**: параметр `timeout=300` задаёт общий бюджет одноразовой операции в секундах (1–86400). Antigravity восстанавливается после промежуточных ошибок внутри бюджета. `FALLBACK_REQUIRED` возвращается только при итоговом отказе или таймауте.
-3. **Агентная загрузка URL в `antigravity_fetch_url`**: агент загружает страницу через браузер или ридер и возвращает выжимку с короткими подтверждающими фрагментами.
+2. **Таймаут**: `timeout` передаётся в промпт как рекомендованный бюджет; по умолчанию он зависит от `effort` (таблица выше). Сервер ждёт ответа и останавливает операцию только через 15 минут. `FALLBACK_REQUIRED` означает отказ без текста ответа; `PARTIAL` сохраняет текст, возвращённый CLI при ошибке.
+3. **Агентная загрузка URL в `antigravity_fetch_url`**: агент загружает страницу через `curl` и возвращает выжимку с короткими подтверждающими фрагментами.
 4. **Ответ по запросу**: Antigravity загружает и проверяет страницу, затем отвечает на `prompt` или готовит summary. Тело страницы возвращается только если оно требуется по `prompt`.
 5. **Экономия времени и токенов**: Запрещены избыточные и дублирующие запросы. Запросы должны быть точечными и сфокусированными.
-6. **Модели по умолчанию: Gemini Flash 3.8+ Low**: Все остальные модели (Pro, не-Flash) строго запрещены. Уровень мышления (effort) — всегда `low`, повышение до `medium` разрешено только в критических ситуациях.
-7. **Модели для суб-агента**: Для managed turns разрешено использовать модели семейства Gemini Flash 3.8+ с уровнями `low`, `medium`, `high`.
-
----
-
-## Доступные инструменты:
-
-1. **`antigravity_list_models(filter_type?, refresh?)`**
-   * Динамический реестр моделей Gemini Flash 3.8+ (все остальные модели запрещены).
-   * Возвращает дефолтную модель (`gemini-3.8-flash-low` или 3.9+), уровни мышления и правила использования.
-
-2. **`antigravity_grounded_search(query, require_sources?, depth?, domains?, output_format?, timeout?)`**
-   * Основной инструмент поиска с Google Grounding.
-   * После сбоя `search_web` Antigravity может получить веб-источники другим доступным способом и раскрывает замену в ответе.
-   * Модель по умолчанию: Gemini Flash Low.
-
-3. **`antigravity_fetch_url(url, prompt?, model?, timeout?)`**
-   * Ответ по `prompt` или summary по умолчанию; HTML, полный текст и конкретные фрагменты включаются только если нужны запросу.
-   * При неполной загрузке Antigravity может отрендерить страницу, дочитать фрагменты или проверить официальный источник. При итоговом отказе возвращается `FALLBACK_REQUIRED`.
-
-4. **`antigravity_deep_research(topic, aspects?, domains?, require_sources?, timeout?)`**
-   * Архитектурное исследование с рассуждениями на базе Gemini Flash Medium. `timeout=300`, 1–86400 секунд.
-
-5. **`antigravity_grounded_dialogue(query, require_sources?, conversation_id?, depth?, domains?, timeout?)`**
-   * Итеративный поиск с сохранением контекста диалога. `timeout=300`, 1–86400 секунд.
-
-6. **`antigravity_turn_start(message, project_dir?, session_id?, mode?, model?, effort?, execution_timeout_seconds?, sync_to_desktop?, agent?, idempotency_key?, result_schema?)`**
-   * Асинхронно создаёт durable turn. Возвращает `turn_id`; `session_id` появляется после stream-события `init`.
-   * Разрешены модели Gemini Flash 3.8+ с effort: `low` (дефолт), `medium`, `high`.
-
-7. **`antigravity_turn_wait/status/interrupt(turn_id)`**
-   * Ожидание, моментальный snapshot и отмена одного turn.
-
-8. **`antigravity_turn_items/commands(turn_id, cursor?, limit?)`**
-   * Наблюдаемые сообщения, reasoning/tool updates и результаты; `commands` оставляет только tool lifecycle.
-
-9. **`antigravity_session_list/read(...)`**
-   * Инвентарь session/turn и чтение метаданных одной session.
-
-10. **`antigravity_subagent_*`**
-   * Совместимые legacy aliases для start/wait/status/continue/stop/run.
-
-11. **`antigravity_archive_session(conversation_id)`**
-   * Архивирует Desktop artifacts и сохраняет resumable CLI conversation.
-
-12. **`ask_antigravity(prompt, context?, model?, effort?, timeout?)`**
-   * Быстрые консультации на базе Gemini Flash Low.
-
-13. **`antigravity_review(code_or_diff, focus_areas?, timeout?)`**
-   * Код-ревью на базе Gemini Flash Medium.
-
-14. **`antigravity_solve_in_project(task, project_dir?, model?)`**
-   * Синоним для `antigravity_subagent_run` с текстовым ответом.
-
-## Лицензия
-
-Код и документация этого репозитория опубликованы под [MIT](LICENSE). Antigravity CLI (`agy`) устанавливается отдельно и не входит в репозиторий.
+6. **Модель и effort**: только семейство Gemini Flash 3.8+, по умолчанию `gemini-3.8-flash` и `effort="medium"`. `high` подходит для архитектурных решений, выбора технологий, подробного исследования и изучения большого материала, где неглубокий проход потеряет знания; `low` подходит только для быстрых узких проверок.

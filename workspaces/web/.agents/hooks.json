@@ -1,0 +1,16 @@
+{
+  "research-gate-web": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$AGY_MCP_PYTHON\" \"$AGY_MCP_GUARD\" web",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
