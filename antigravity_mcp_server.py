@@ -22,20 +22,20 @@ Antigravity MCP Server connects your AI environment to Google Gemini and Google 
 
 Core Operating Rules:
 1. Grounded Search is the PRIMARY method for searching preview and factual information.
-2. All research runs through Antigravity. timeout is the recommended time budget passed to the model; by default it follows effort: 280, 280 or 480 seconds for search and fetch, and 90, 180 or 300 seconds for Scout and Docs Research at low, medium or high (caller-configurable, 1–900). The server waits for the answer and stops an operation only at its 15-minute safety limit. Allow recovery from intermediate tool failures.
+2. All research runs through Antigravity. timeout is the recommended time budget passed to the model; by default it follows effort: 280, 280, 480 and 480 seconds for search and fetch, and 90, 180, 300 and 300 seconds for Scout and Docs Research at low, medium, high and xhigh (caller-configurable, 1–900). The server waits for the answer and stops an operation only at its 15-minute safety limit. Allow recovery from intermediate tool failures.
 3. antigravity_fetch_url lets Antigravity load the page and answer prompt, or summarize by default. Return page body only when prompt requires it.
 4. Every tool runs Antigravity from an isolated workspace with a PreToolUse gate. Search and fetch may only search and read public pages through curl. Scout and Docs Research perform static reading only: no shell commands, process execution, tests, builds, services, or delegation, and MCP tools only when they read. Split broad investigations into small calls. Scout reports runtime checks for the caller; Docs Research answers one documentation question with quoted current or history documents. PARTIAL preserves available answer text after a failure.
 5. Token & Time Economy: Do not make redundant or excessive queries. Keep requests focused and concise.
-6. Model and Effort: every tool takes optional model, a Gemini Flash family of version 3.8 or later without a level (default gemini-3.8-flash; non-Flash models are forbidden), and effort: low, medium (default) or high. Use high for architecture or technology decisions, detailed research and bulk study where a shallow pass would lose knowledge; use low only for quick narrow lookups.
+6. Model and Effort: every tool takes optional model, which defaults to gemini-4-hydrogen and accepts only that family, and effort: low, medium (default), high or xhigh (extra high). Use high for architecture or technology decisions, detailed research and bulk study where a shallow pass would lose knowledge; use low only for quick narrow lookups.
 """.strip()
 
-DEFAULT_MODEL = "gemini-3.8-flash"
+DEFAULT_MODEL = "gemini-4-hydrogen"
 DEFAULT_EFFORT = "medium"
-Effort = Literal["low", "medium", "high"]
+Effort = Literal["low", "medium", "high", "xhigh"]
 EFFORTS = get_args(Effort)
 # The recommended time budget grows with effort; an explicit timeout replaces it.
-WEB_RESEARCH_TIMEOUT_SECONDS = {"low": 280, "medium": 280, "high": 480}
-LOCAL_RESEARCH_TIMEOUT_SECONDS = {"low": 90, "medium": 180, "high": 300}
+WEB_RESEARCH_TIMEOUT_SECONDS = {"low": 280, "medium": 280, "high": 480, "xhigh": 480}
+LOCAL_RESEARCH_TIMEOUT_SECONDS = {"low": 90, "medium": 180, "high": 300, "xhigh": 300}
 # Research tools and Scout pass timeout to the model as a recommendation; only this limit stops them.
 RESEARCH_SAFETY_LIMIT_SECONDS = 15 * 60
 CLI_TIMEOUT_MULTIPLIER: float = 0.96
@@ -102,14 +102,13 @@ class AgyStreamResult(TypedDict):
 
 
 def resolve_model(model: str, effort: str) -> str:
-    """Return the CLI model id that combines a Gemini Flash family with an effort level."""
+    """Return the CLI model id that combines Gemini 4 Hydrogen with an effort level."""
     if effort not in EFFORTS:
-        raise ValueError("effort must be low, medium, or high")
+        raise ValueError(f"effort must be one of {', '.join(EFFORTS)}")
     if model.endswith(tuple(f"-{level}" for level in EFFORTS)):
-        raise ValueError(f"model takes a Gemini Flash family without a level, such as {DEFAULT_MODEL}; pass the level in effort")
-    match = re.fullmatch(r"gemini-(\d+(?:\.\d+)?)-flash", model)
-    if not match or tuple(int(part) for part in match.group(1).split(".")) < (3, 8):
-        raise ValueError("Only Gemini Flash models of version 3.8 or later are permitted")
+        raise ValueError(f"pass {DEFAULT_MODEL} without a level in model and set effort separately")
+    if model != DEFAULT_MODEL:
+        raise ValueError(f"model must be {DEFAULT_MODEL}")
     return f"{model}-{effort}"
 
 
@@ -396,7 +395,8 @@ def build_codebase_scout_prompt(
         f"Reasoning Effort and Investigation Depth: {effort}",
         {"low": "Targeted lookups, entry points and exports; return a concise map.",
          "medium": "Follow relevant imports/callers and inspect critical implementations and contracts.",
-         "high": "Fully trace the requested subsystem, including dependencies, errors and test source."}[effort],
+         "high": "Fully trace the requested subsystem, including dependencies, errors and test source.",
+         "xhigh": "Trace the requested subsystem and check competing explanations against callers, errors and tests."}[effort],
         "\nExecution Speed & Strategy:",
         "1. Batch independent read-only file and symbol lookups through available native tools, MCP servers, and resources.",
         "2. CodeGraph First: Use an existing graph index for symbols/callers, then verify current files. Otherwise use native file search/read and read-only Serena queries. Do not build or refresh an index.",
@@ -537,7 +537,8 @@ def build_docs_research_prompt(
         f"Reasoning Effort and Investigation Depth: {effort}",
         {"low": "Find and quote the few documents that answer the question.",
          "medium": "Also cross-check related documents and versions for conflicts.",
-         "high": "Trace the topic through every relevant document, version and history record."}[effort],
+         "high": "Trace the topic through every relevant document, version and history record.",
+         "xhigh": "Trace the relevant records within scope and reconcile conflicting claims using dated evidence."}[effort],
         f"\nDocument Scope: {scope}. {DOCS_RESEARCH_SCOPES[scope]}",
         "Before ranking a document from a versioned set (for example docs/<version>/), read the package manifest of that set (package.json, pyproject.toml, Cargo.toml): only the manifest version is current; without a manifest, the newest version folder is current. Documents of every other version are history. Every unversioned document is current, including session records, plans, reports, journals and closed tasks. If the question or the project's instruction files define current documents differently, follow them.",
         "\nSearch Strategy:",
@@ -702,9 +703,9 @@ async def antigravity_grounded_search(
         require_sources: Put Markdown links to sources next to the claims they support (default true).
         domains: Domains to prefer, such as official documentation; other sources serve only when these lack the answer.
         output_format: markdown (default) or json with summary, key_findings, sources and unresolved_or_conflicting.
-        model: Gemini Flash family of version 3.8 or later, without a level (default gemini-3.8-flash).
-        effort: Reasoning depth: low for a quick narrow lookup, medium (default) for ordinary research, high for architecture or technology decisions and detailed research.
-        timeout: Recommended time budget in seconds passed to the model (default 280 for low and medium, 480 for high; range 1–900). The server waits for the answer up to its 15-minute safety limit.
+        model: Gemini 4 Hydrogen family ID without a level (default gemini-4-hydrogen).
+        effort: Reasoning depth: low for a quick narrow lookup, medium (default) for ordinary research, high for architecture or technology decisions and detailed research, xhigh for reconciling conflicting evidence.
+        timeout: Recommended time budget in seconds passed to the model (default 280 for low and medium, 480 for high and xhigh; range 1–900). The server waits for the answer up to its 15-minute safety limit.
     """
     try:
         return await run_research_operation(
@@ -753,9 +754,9 @@ async def antigravity_fetch_url(
     Args:
         url: Full HTTP or HTTPS address of the page.
         prompt: The facts, APIs, examples and format to extract; without it the page is summarized.
-        model: Gemini Flash family of version 3.8 or later, without a level (default gemini-3.8-flash).
-        effort: Reasoning depth: low for a quick narrow lookup, medium (default) for ordinary reading, high for architecture or technology decisions and detailed research.
-        timeout: Recommended time budget in seconds passed to the model (default 280 for low and medium, 480 for high; range 1–900). The server waits for the answer up to its 15-minute safety limit.
+        model: Gemini 4 Hydrogen family ID without a level (default gemini-4-hydrogen).
+        effort: Reasoning depth: low for a quick narrow lookup, medium (default) for ordinary reading, high for architecture or technology decisions and detailed research, xhigh for reconciling conflicting evidence.
+        timeout: Recommended time budget in seconds passed to the model (default 280 for low and medium, 480 for high and xhigh; range 1–900). The server waits for the answer up to its 15-minute safety limit.
     """
     try:
         return await run_research_operation(
@@ -788,9 +789,9 @@ async def antigravity_codebase_scout(
         query: Specific question or architectural topic to investigate in the codebase.
         target_path: Relative or absolute path to the workspace, directory, or package to explore. Defaults to current working directory.
         focus_files: Optional list of specific files, paths, or symbols to prioritize.
-        model: Gemini Flash family of version 3.8 or later, without a level (default gemini-3.8-flash).
-        effort: Reasoning and investigation depth: low for entry points/exports, medium (default) for relevant imports/contracts, high for a full trace of one scoped subsystem.
-        timeout: Recommended time budget in seconds passed to the model (default 90, 180 or 300 for low, medium or high; range 1–900). The server waits for the report up to its 15-minute safety limit.
+        model: Gemini 4 Hydrogen family ID without a level (default gemini-4-hydrogen).
+        effort: Reasoning and investigation depth: low for entry points/exports, medium (default) for relevant imports/contracts, high for a full trace of one scoped subsystem, xhigh to cross-check competing explanations.
+        timeout: Recommended time budget in seconds passed to the model (default 90 for low, 180 for medium, 300 for high and xhigh; range 1–900). The server waits for the report up to its 15-minute safety limit.
     """
     resolved_cwd = os.path.abspath(target_path) if target_path else os.getcwd()
     if not os.path.isdir(resolved_cwd):
@@ -843,9 +844,9 @@ async def antigravity_docs_research(
         target_path: Relative or absolute path to the repository, directory, or package whose documents to search. Defaults to current working directory.
         focus_files: Optional list of documents or folders to prioritize.
         scope: current (default) ranks current documents; history ranks documents of older versions that explain why or when a decision was made; all ranks both with labels.
-        model: Gemini Flash family of version 3.8 or later, without a level (default gemini-3.8-flash).
-        effort: Reasoning and search depth: low finds and quotes the answering documents, medium (default) also cross-checks related documents and versions, high traces the topic through all versions and history.
-        timeout: Recommended time budget in seconds passed to the model (default 90, 180 or 300 for low, medium or high; range 1–900). The server waits for the report up to its 15-minute safety limit.
+        model: Gemini 4 Hydrogen family ID without a level (default gemini-4-hydrogen).
+        effort: Reasoning and search depth: low finds and quotes the answering documents, medium (default) also cross-checks related documents and versions, high traces the topic through all versions and history, xhigh reconciles conflicting records within scope.
+        timeout: Recommended time budget in seconds passed to the model (default 90 for low, 180 for medium, 300 for high and xhigh; range 1–900). The server waits for the report up to its 15-minute safety limit.
     """
     resolved_cwd = os.path.abspath(target_path) if target_path else os.getcwd()
     if not os.path.isdir(resolved_cwd):

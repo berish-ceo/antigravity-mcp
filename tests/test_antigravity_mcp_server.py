@@ -125,7 +125,7 @@ class AntigravityMcpServerTest(unittest.IsolatedAsyncioTestCase):
 
     def test_stream_command_reads_the_prompt_from_stdin(self) -> None:
         command = server.build_agy_stream_command(
-            model="gemini-3.8-flash-low",
+            model="gemini-4-hydrogen-low",
             effort="low",
             timeout=60,
             extra_flags=["--add-dir", "/tmp/project"],
@@ -135,14 +135,14 @@ class AntigravityMcpServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(command[command.index("--print-timeout") + 1], "58s")
         self.assertEqual(command[command.index("--add-dir") + 1], "/tmp/project")
 
-    def test_resolve_model_builds_flash_id_and_rejects_others(self) -> None:
-        self.assertEqual(server.resolve_model("gemini-3.8-flash", "medium"), "gemini-3.8-flash-medium")
-        self.assertEqual(server.resolve_model("gemini-4.0-flash", "high"), "gemini-4.0-flash-high")
+    def test_resolve_model_builds_hydrogen_id_and_rejects_others(self) -> None:
+        for effort in ("low", "medium", "high", "xhigh"):
+            self.assertEqual(server.resolve_model("gemini-4-hydrogen", effort), f"gemini-4-hydrogen-{effort}")
         for model, effort, error in (
-            ("gemini-3.8-flash-low", "low", "without a level"),
-            ("gemini-pro", "medium", "version 3.8 or later"),
-            ("gemini-3.7-flash", "medium", "version 3.8 or later"),
-            ("gemini-3.8-flash", "max", "effort must be"),
+            ("gemini-4-hydrogen-low", "low", "without a level"),
+            ("gemini-pro", "medium", "model must be gemini-4-hydrogen"),
+            ("gemini-3.8-flash", "medium", "model must be gemini-4-hydrogen"),
+            ("gemini-4-hydrogen", "max", "effort must be"),
         ):
             with self.assertRaisesRegex(ValueError, error):
                 server.resolve_model(model, effort)
@@ -165,7 +165,7 @@ class AntigravityMcpServerTest(unittest.IsolatedAsyncioTestCase):
             result = await server.run_agy_stream_turn(
                 message="private prompt",
                 cwd=self.temp_dir.name,
-                model="gemini-3.8-flash-low",
+                model="gemini-4-hydrogen-low",
                 effort="low",
                 timeout=5,
                 extra_flags=None,
@@ -226,20 +226,20 @@ class AntigravityMcpServerTest(unittest.IsolatedAsyncioTestCase):
             result = await server.antigravity_grounded_search("query")
             self.assertTrue(result.startswith("FALLBACK_REQUIRED"))
 
-    async def test_scout_uses_flash_family_with_selected_effort(self) -> None:
+    async def test_scout_uses_hydrogen_family_with_selected_effort(self) -> None:
         result = {"status": "COMPLETED", "response": "", "structured_output": {
             "status": "success", "content": "report", "error": None,
         }, "conversation_id": None}
         with patch.object(server, "run_agy_stream_turn", new_callable=AsyncMock, return_value=result) as run:
-            for effort, budget, words in (("low", 90, 500), ("medium", 180, 800), ("high", 300, None)):
+            for effort, budget, words in (("low", 90, 500), ("medium", 180, 800), ("high", 300, None), ("xhigh", 300, None)):
                 report = await server.antigravity_codebase_scout("q", target_path=self.temp_dir.name, effort=effort)
                 self.assertEqual(report, "report")
-                self.assertEqual(run.call_args.kwargs["model"], f"gemini-3.8-flash-{effort}")
+                self.assertEqual(run.call_args.kwargs["model"], f"gemini-4-hydrogen-{effort}")
                 self.assertEqual(run.call_args.kwargs["effort"], effort)
                 message = run.call_args.kwargs["message"]
                 self.assertIn(f"Reasoning Effort and Investigation Depth: {effort}", message)
                 depth = {"low": "entry points and exports", "medium": "critical implementations and contracts",
-                         "high": "including dependencies, errors and test source"}[effort]
+                         "high": "including dependencies, errors and test source", "xhigh": "competing explanations"}[effort]
                 self.assertIn(depth, message)
                 self.assertIn(f"about {budget} seconds", message)
                 if words:
@@ -247,7 +247,7 @@ class AntigravityMcpServerTest(unittest.IsolatedAsyncioTestCase):
                 else:
                     self.assertNotIn("keep it under", message)
             await server.antigravity_codebase_scout("q", target_path=self.temp_dir.name)
-            self.assertEqual(run.call_args.kwargs["model"], "gemini-3.8-flash-medium")
+            self.assertEqual(run.call_args.kwargs["model"], "gemini-4-hydrogen-medium")
             self.assertEqual(run.call_args.kwargs["timeout"], server.RESEARCH_SAFETY_LIMIT_SECONDS)
             message = run.call_args.kwargs["message"]
             self.assertIn("about 180 seconds", message)
@@ -263,7 +263,7 @@ class AntigravityMcpServerTest(unittest.IsolatedAsyncioTestCase):
             run.reset_mock()
             invalid = await server.antigravity_codebase_scout("q", target_path=self.temp_dir.name, effort="thorough")
             self.assertIn("effort must be", invalid)
-            invalid = await server.antigravity_codebase_scout("q", target_path=self.temp_dir.name, model="gemini-3.8-flash-low")
+            invalid = await server.antigravity_codebase_scout("q", target_path=self.temp_dir.name, model="gemini-4-hydrogen-low")
             self.assertIn("without a level", invalid)
             run.assert_not_called()
 
@@ -275,11 +275,15 @@ class AntigravityMcpServerTest(unittest.IsolatedAsyncioTestCase):
             for scope in ("current", "history", "all"):
                 report = await server.antigravity_docs_research("q", target_path=self.temp_dir.name, scope=scope, effort="high")
                 self.assertEqual(report, "report")
-                self.assertEqual(run.call_args.kwargs["model"], "gemini-3.8-flash-high")
+                self.assertEqual(run.call_args.kwargs["model"], "gemini-4-hydrogen-high")
                 self.assertIn(f"Document Scope: {scope}. {server.DOCS_RESEARCH_SCOPES[scope]}", run.call_args.kwargs["message"])
                 self.assertIn("about 300 seconds", run.call_args.kwargs["message"])
+            report = await server.antigravity_docs_research("q", target_path=self.temp_dir.name, effort="xhigh")
+            self.assertEqual(report, "report")
+            self.assertEqual(run.call_args.kwargs["model"], "gemini-4-hydrogen-xhigh")
+            self.assertIn("about 300 seconds", run.call_args.kwargs["message"])
             await server.antigravity_docs_research("q", target_path=self.temp_dir.name)
-            self.assertEqual(run.call_args.kwargs["model"], "gemini-3.8-flash-medium")
+            self.assertEqual(run.call_args.kwargs["model"], "gemini-4-hydrogen-medium")
             message = run.call_args.kwargs["message"]
             self.assertIn("Document Scope: current.", message)
             self.assertIn("about 180 seconds", message)
@@ -294,7 +298,7 @@ class AntigravityMcpServerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(flags[flags.index("--add-dir") + 1], self.temp_dir.name)
             run.reset_mock()
             for kwargs, error in (({"scope": "recent"}, "scope must be"), ({"effort": "thorough"}, "effort must be"),
-                                  ({"model": "gemini-pro"}, "version 3.8 or later")):
+                                  ({"model": "gemini-pro"}, "model must be gemini-4-hydrogen")):
                 self.assertIn(error, await server.antigravity_docs_research("q", target_path=self.temp_dir.name, **kwargs))
             run.assert_not_called()
 
@@ -418,9 +422,9 @@ class AntigravityMcpServerTest(unittest.IsolatedAsyncioTestCase):
         schemas = {tool.name: tool.input_schema["properties"] for tool in tools}
         self.assertEqual(len(schemas), 4)
         for properties in schemas.values():
-            self.assertEqual(properties["effort"]["enum"], ["low", "medium", "high"])
+            self.assertEqual(properties["effort"]["enum"], ["low", "medium", "high", "xhigh"])
             self.assertEqual(properties["effort"]["default"], "medium")
-            self.assertEqual(properties["model"]["default"], "gemini-3.8-flash")
+            self.assertEqual(properties["model"]["default"], "gemini-4-hydrogen")
         self.assertEqual(schemas["antigravity_docs_research"]["scope"]["enum"], ["current", "history", "all"])
         self.assertEqual(schemas["antigravity_grounded_search"]["output_format"]["enum"], ["markdown", "json"])
 
@@ -481,21 +485,23 @@ class AntigravityMcpServerTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(server, "run_agy_stream_turn", new_callable=AsyncMock, return_value=result) as run:
             for function, args in calls:
                 await function(**args)
-                self.assertEqual(run.call_args.kwargs["model"], "gemini-3.8-flash-medium")
+                self.assertEqual(run.call_args.kwargs["model"], "gemini-4-hydrogen-medium")
                 self.assertEqual(run.call_args.kwargs["effort"], "medium")
                 self.assertEqual(run.call_args.kwargs["timeout"], server.RESEARCH_SAFETY_LIMIT_SECONDS)
                 self.assertIn("about 280 seconds", run.call_args.kwargs["message"])
                 self.assertEqual(run.call_args.kwargs["cwd"], str(SERVER_PATH.parent / "workspaces" / "web"))
                 self.assertEqual(run.call_args.kwargs["extra_flags"], ["--disable-slash-commands"])
-                await function(**args, effort="high")
-                self.assertEqual(run.call_args.kwargs["model"], "gemini-3.8-flash-high")
-                self.assertIn("about 480 seconds", run.call_args.kwargs["message"])
+                for effort in ("high", "xhigh"):
+                    await function(**args, effort=effort)
+                    self.assertEqual(run.call_args.kwargs["model"], f"gemini-4-hydrogen-{effort}")
+                    self.assertEqual(run.call_args.kwargs["effort"], effort)
+                    self.assertIn("about 480 seconds", run.call_args.kwargs["message"])
                 await function(**args, effort="low", timeout=450)
-                self.assertEqual(run.call_args.kwargs["model"], "gemini-3.8-flash-low")
+                self.assertEqual(run.call_args.kwargs["model"], "gemini-4-hydrogen-low")
                 self.assertIn("about 450 seconds", run.call_args.kwargs["message"])
             run.reset_mock()
             for kwargs in ({"timeout": 0}, {"timeout": -1}, {"timeout": 901}, {"timeout": True}, {"timeout": 1.5},
-                           {"model": "gemini-3.8-flash-low"}, {"model": "gemini-pro"}, {"effort": "max"}):
+                           {"model": "gemini-4-hydrogen-low"}, {"model": "gemini-pro"}, {"effort": "max"}):
                 result = await server.antigravity_fetch_url("https://example.com", **kwargs)
                 self.assertTrue(result.startswith("Error: "), (kwargs, result))
             self.assertIn("between 1 and 900", await server.antigravity_grounded_search("q", timeout=901))
